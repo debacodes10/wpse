@@ -1,0 +1,7 @@
+#define NETWORK_H
+
+int make_socket_non_blocking(int fd);
+int init_server_socket(int port);
+int add_to_epoll(int epoll_fd, int fd, uint32_t events);
+
+#endif
