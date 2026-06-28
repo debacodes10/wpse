@@ -5,6 +5,7 @@
 #include <errno.h>
 #include "network.h"
 #include "protocol.h"
+#include <sys/socket.h>
 
 #define PORT 8080
 #define MAX_EVENTS 64

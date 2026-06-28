@@ -1,4 +1,8 @@
+#ifndef NETWORK_H
 #define NETWORK_H
+
+#include <sys/types.h>
+#include <stdint.h>
 
 int make_socket_non_blocking(int fd);
 int init_server_socket(int port);
