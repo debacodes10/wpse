@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Isrc -O2
-SRCS = src/main.c src/network.c src/protocol.c
+SRCS = src/main.c src/network.c src/protocol.c src/cache.c
 OBJS = $(SRCS:.c=.o)
 TARGET = engine_server
 
