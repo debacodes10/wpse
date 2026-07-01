@@ -6,9 +6,11 @@
 #include "network.h"
 #include "protocol.h"
 #include <sys/socket.h>
+#include "cache.h"
 
 #define PORT 8080
 #define MAX_EVENTS 64
+#define CACHE_SIZE 1024
 
 int main() {
     int server_socket = init_server_socket(PORT);
@@ -21,6 +23,12 @@ int main() {
     if (epoll_fd == -1 || add_to_epoll(epoll_fd, server_socket, EPOLLIN) == -1) {
         perror("Failed to setup epoll framework");
         exit(EXIT_FAILURE);
+    }
+
+    cache_t *engine_cache = cache_create(CACHE_SIZE);
+    if (!engine_cache){
+      perror("Failed to allocate memory cache.\n");
+      exit(EXIT_FAILURE);
     }
 
     struct epoll_event events[MAX_EVENTS];
@@ -85,12 +93,32 @@ int main() {
                   read_exact(client_fd, value, header.val_len);
                 }
 
+                if(header.opcode == OP_SET){
+                  cache_set(engine_cache, key, value, header.val_len);
+                  printf("ENGINE: SET Key=[%s] ValLen=%d\n", key, header.val_len);
+                  
+                  char ack[] = "STORED\n";
+                  send(client_fd, ack, sizeof(ack) - 1, 0);
+
+                } else if (header.opcode == OP_GET){
+                  cache_node_t *node = cache_get(engine_cache, key);
+                  if (node) {
+                      printf("ENGINE: HIT Key=[%s]\n", key);
+                      // Send back the actual binary value data from memory
+                      send(client_fd, node->value, node->val_len, 0);
+                      send(client_fd, "\n", 1, 0);
+                  } else {
+                      printf("ENGINE: MISS Key=[%s]\n", key);
+                      char not_found[] = "ERR: NOT_FOUND\n";
+                      send(client_fd, not_found, sizeof(not_found) - 1, 0);
+                  }
+                } else {
+                  char unknown[] = "ERR: UNKNOWN_OPCODE\n";
+                  send(client_fd, unknown, sizeof(unknown) - 1, 0);
+                }
+
                 printf("Successfully parsed payload -> Key: [%s] | ValLen: %d\n", key, header.val_len);
                 
-                // Response back to client
-                char ack[] = "Command Pack Received & Parsed Successfully\n";
-                send(client_fd, ack, sizeof(ack), 0);
-
                 // Clean up allocations for this iteration
                 free(key);
                 free(value);
@@ -98,6 +126,7 @@ int main() {
         }
     }
 
+    cache_free(engine_cache);
     close(server_socket);
     close(epoll_fd);
     return 0;
