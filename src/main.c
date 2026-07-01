@@ -55,14 +55,14 @@ int main() {
                 db_header_t header;
                 
                 // Read exact header dimensions
-                ssize_t bytes_read = read(client_fd, &header, sizeof(db_header_t));
+                ssize_t bytes_read = read_exact(client_fd, &header, sizeof(db_header_t));
                 if (bytes_read <= 0) {
                     epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
                     close(client_fd);
                     continue;
                 }
 
-                if (parse_header((uint8_t*)&header, &header) < 0) {
+                if (parse_header(&header) < 0) {
                     char err_msg[] = "Error: Invalid Wire Protocol Header\n";
                     send(client_fd, err_msg, sizeof(err_msg), 0);
                     continue;
@@ -71,9 +71,29 @@ int main() {
                 printf("Valid Command Received: Opcode=0x%x, KeyLen=%d, ValLen=%d\n", 
                        header.opcode, header.key_len, header.val_len);
                 
-                // Placeholder response (Next up: payload read & engine routing!)
-                char ack[] = "Header verified\n";
+                char *key = malloc(header.key_len+1);
+                uint8_t *value = malloc(header.val_len+1);
+
+                if(header.key_len > 0){
+                  read_exact(client_fd, key, header.key_len);
+                  key[header.key_len] = '\0';
+                } else {
+                  key[0] = '\0';
+                }
+
+                if (header.val_len>0){
+                  read_exact(client_fd, value, header.val_len);
+                }
+
+                printf("Successfully parsed payload -> Key: [%s] | ValLen: %d\n", key, header.val_len);
+                
+                // Response back to client
+                char ack[] = "Command Pack Received & Parsed Successfully\n";
                 send(client_fd, ack, sizeof(ack), 0);
+
+                // Clean up allocations for this iteration
+                free(key);
+                free(value);
             }
         }
     }

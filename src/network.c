@@ -4,6 +4,8 @@
 #include <fcntl.h>
 #include <sys/epoll.h>
 #include <netinet/in.h>
+#include <unistd.h>
+#include <errno.h>
 
 int make_socket_non_blocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -34,4 +36,26 @@ int init_server_socket(int port) {
 int add_to_epoll(int epoll_fd, int fd, uint32_t events) {
     struct epoll_event ev = { .events = events, .data.fd = fd };
     return epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+}
+
+ssize_t read_exact(int fd, void *buf, size_t count) {
+    size_t total_read = 0;
+    char *ptr = (char *)buf;
+
+    while (total_read < count) {
+        ssize_t bytes = read(fd, ptr + total_read, count - total_read);
+        
+        if (bytes < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return total_read;
+            }
+            return -1;
+        } else if (bytes == 0) {
+            return total_read; 
+        }
+        
+        total_read += bytes;
+    }
+    return total_read;
 }

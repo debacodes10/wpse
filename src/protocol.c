@@ -2,8 +2,7 @@
 #include <netinet/in.h>
 #include <string.h>
 
-int parse_header(const uint8_t *buffer, db_header_t *header) {
-    memcpy(header, buffer, sizeof(db_header_t));
+int parse_header(db_header_t *header) {
 
     if (header->magic != MAGIC_BYTE) {
         return -1; // Invalid packet protocol identification

@@ -27,6 +27,6 @@ typedef struct {
 } db_packet_t;
 
 // Parses a buffer into a structured packet. Returns 0 on success.
-int parse_header(const uint8_t *buffer, db_header_t *header);
+int parse_header(db_header_t *header);
 
 #endif
