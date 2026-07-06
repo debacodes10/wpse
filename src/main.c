@@ -6,11 +6,14 @@
 #include "network.h"
 #include "protocol.h"
 #include <sys/socket.h>
+#include <string.h>
 #include "cache.h"
+#include "pager.h"
 
 #define PORT 8080
 #define MAX_EVENTS 64
 #define CACHE_SIZE 1024
+#define DB_FILE "engine.db"
 
 int main() {
     int server_socket = init_server_socket(PORT);
@@ -31,8 +34,33 @@ int main() {
       exit(EXIT_FAILURE);
     }
 
+    pager_t *db_pager = pager_open(DB_FILE);
+    if (!db_pager){
+      perror("Failed to initialize persistent block storage engine.");
+      exit(EXIT_FAILURE);
+    }
+
+    uint8_t static_disk_page[PAGE_SIZE];
+    memset(static_disk_page, 0, PAGE_SIZE);
+
+    if (db_pager->total_pages > 0){
+      if (pager_read_page(db_pager, 0, static_disk_page) == 0){
+        if (static_disk_page[0] == 'D' && static_disk_page[1] == 'B'){
+          uint8_t val_len = static_disk_page[2];
+          char saved_key[] = "user_id";
+
+          char recovered_val[256];
+          memcpy(recovered_val, &static_disk_page[3], val_len);
+          recovered_val[val_len] = '\0';
+
+          cache_set(engine_cache, saved_key, (uint8_t*)recovered_val, val_len);
+          printf("RECOVERY: Found existing storage page. Restored key [user_id] = [%s] from disk!\n", recovered_val);
+        }
+      }
+    }
+
     struct epoll_event events[MAX_EVENTS];
-    printf("Modular storage engine running on port %d...\n", PORT);
+    printf("Modular storage engine with disk persistence running on port %d...\n", PORT);
 
     while (1) {
         int num_events = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
@@ -91,12 +119,25 @@ int main() {
 
                 if (header.val_len>0){
                   read_exact(client_fd, value, header.val_len);
+                  value[header.val_len] = '\0';
                 }
 
                 if(header.opcode == OP_SET){
                   cache_set(engine_cache, key, value, header.val_len);
                   printf("ENGINE: SET Key=[%s] ValLen=%d\n", key, header.val_len);
                   
+                if (strcmp(key, "user_id") == 0 && header.val_len < 250){
+                  memset(static_disk_page, 0, PAGE_SIZE);
+                  static_disk_page[0] = 'D';
+                  static_disk_page[1] = 'B';
+                  static_disk_page[2] = header.val_len;
+                  memcpy(&static_disk_page[3], value, header.val_len);
+
+                  pager_write_page(db_pager, 0, static_disk_page);
+                  pager_sync(db_pager);
+                  printf("PERSISTENCE: Synchronized key [%s] safely down to Page 0 blocks.\n", key);
+                }
+
                   char ack[] = "STORED\n";
                   send(client_fd, ack, sizeof(ack) - 1, 0);
 
@@ -127,6 +168,7 @@ int main() {
     }
 
     cache_free(engine_cache);
+    pager_close(db_pager);
     close(server_socket);
     close(epoll_fd);
     return 0;
