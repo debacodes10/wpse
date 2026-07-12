@@ -44,7 +44,7 @@ int pager_read_page(pager_t *pager, uint64_t page_id, void *page_buffer){
 }
 
 int pager_write_page(pager_t *pager, uint64_t page_id, const void *page_buffer){
-  off_t offset = page_id & PAGE_SIZE;
+  off_t offset = page_id * PAGE_SIZE;
   ssize_t bytes_written = pwrite(pager->file_fd, page_buffer, PAGE_SIZE, offset);
   if (bytes_written < 0){
     perror("Pager: Critical write error inside pwrite.");

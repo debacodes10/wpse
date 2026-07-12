@@ -9,11 +9,22 @@
 #include <string.h>
 #include "cache.h"
 #include "pager.h"
+#include "btree.h"
 
 #define PORT 8080
 #define MAX_EVENTS 64
 #define CACHE_SIZE 1024
 #define DB_FILE "engine.db"
+#define ROOT_PAGE_ID 1
+
+uint64_t hash_string_to_u64(const char *str) {
+    uint64_t hash = 14695981039346656037ULL; // FNV-1a 64-bit offset basis
+    while (*str) {
+        hash ^= (uint64_t)(unsigned char)*str++;
+        hash *= 1099511628211ULL; // FNV-1a 64-bit prime
+    }
+    return hash;
+}
 
 int main() {
     int server_socket = init_server_socket(PORT);
@@ -40,23 +51,10 @@ int main() {
       exit(EXIT_FAILURE);
     }
 
-    uint8_t static_disk_page[PAGE_SIZE];
-    memset(static_disk_page, 0, PAGE_SIZE);
-
-    if (db_pager->total_pages > 0){
-      if (pager_read_page(db_pager, 0, static_disk_page) == 0){
-        if (static_disk_page[0] == 'D' && static_disk_page[1] == 'B'){
-          uint8_t val_len = static_disk_page[2];
-          char saved_key[] = "user_id";
-
-          char recovered_val[256];
-          memcpy(recovered_val, &static_disk_page[3], val_len);
-          recovered_val[val_len] = '\0';
-
-          cache_set(engine_cache, saved_key, (uint8_t*)recovered_val, val_len);
-          printf("RECOVERY: Found existing storage page. Restored key [user_id] = [%s] from disk!\n", recovered_val);
-        }
-      }
+    btree_t *db_tree = btree_open(db_pager, ROOT_PAGE_ID);
+    if (!db_tree) {
+        perror("Failed to initialize dynamic B-Tree subsystem");
+        exit(EXIT_FAILURE);
     }
 
     struct epoll_event events[MAX_EVENTS];
@@ -122,20 +120,16 @@ int main() {
                   value[header.val_len] = '\0';
                 }
 
+                uint64_t btree_key = hash_string_to_u64(key);
+
                 if(header.opcode == OP_SET){
                   cache_set(engine_cache, key, value, header.val_len);
-                  printf("ENGINE: SET Key=[%s] ValLen=%d\n", key, header.val_len);
+                  printf("ENGINE: SET Key=[%s] (Hash=0x%lx) ValLen=%d\n", key, btree_key, header.val_len);
                   
-                if (strcmp(key, "user_id") == 0 && header.val_len < 250){
-                  memset(static_disk_page, 0, PAGE_SIZE);
-                  static_disk_page[0] = 'D';
-                  static_disk_page[1] = 'B';
-                  static_disk_page[2] = header.val_len;
-                  memcpy(&static_disk_page[3], value, header.val_len);
-
-                  pager_write_page(db_pager, 0, static_disk_page);
-                  pager_sync(db_pager);
-                  printf("PERSISTENCE: Synchronized key [%s] safely down to Page 0 blocks.\n", key);
+                if (btree_insert(db_tree, btree_key, value, header.val_len) == 0) {
+                  printf("B-TREE: Successfully structured and flushed data down to disk blocks.\n");
+                } else {
+                  printf("B-TREE ERROR: Failed disk synchronization routine.\n");
                 }
 
                   char ack[] = "STORED\n";
@@ -149,18 +143,30 @@ int main() {
                       send(client_fd, node->value, node->val_len, 0);
                       send(client_fd, "\n", 1, 0);
                   } else {
-                      printf("ENGINE: MISS Key=[%s]\n", key);
-                      char not_found[] = "ERR: NOT_FOUND\n";
-                      send(client_fd, not_found, sizeof(not_found) - 1, 0);
+                      printf("ENGINE: MEMORY CACHE MISS -> Searching B-Tree indices for Hash=0x%lx...\n", btree_key);
+                      uint8_t disk_val_buffer[16];
+                      uint32_t disk_val_len = 0;
+
+                      if (btree_get(db_tree, btree_key, disk_val_buffer, &disk_val_len)) {
+                          printf("B-TREE HIT: Recovered data from physical sector files. Warming cache...\n");
+                          
+                          cache_set(engine_cache, key, disk_val_buffer, disk_val_len);
+                          
+                          send(client_fd, disk_val_buffer, disk_val_len, 0);
+                          send(client_fd, "\n", 1, 0);
+                      } else {
+                          printf("B-TREE MISS: Key coordinate does not exist.\n");
+                          char not_found[] = "ERR: NOT_FOUND\n";
+                          send(client_fd, not_found, sizeof(not_found) - 1, 0);
+                        } 
                   }
-                } else {
-                  char unknown[] = "ERR: UNKNOWN_OPCODE\n";
-                  send(client_fd, unknown, sizeof(unknown) - 1, 0);
+                  } else {
+                    char unknown[] = "ERR: UNKNOWN_OPCODE\n";
+                    send(client_fd, unknown, sizeof(unknown) - 1, 0);
                 }
 
                 printf("Successfully parsed payload -> Key: [%s] | ValLen: %d\n", key, header.val_len);
                 
-                // Clean up allocations for this iteration
                 free(key);
                 free(value);
             }
@@ -168,6 +174,7 @@ int main() {
     }
 
     cache_free(engine_cache);
+    free(db_tree);
     pager_close(db_pager);
     close(server_socket);
     close(epoll_fd);

@@ -8,7 +8,7 @@ btree_t* btree_open(pager_t *pager, uint64_t root_page_id){
   tree->pager = pager;
   tree->root_page_id = root_page_id;
 
-  if (pager->total_pages <= root_page_id){
+  if (pager->total_pages == 0 || pager->total_pages <= root_page_id){
     uint8_t buffer[PAGE_SIZE];
     memset(buffer, 0, PAGE_SIZE);
 
@@ -19,7 +19,10 @@ btree_t* btree_open(pager_t *pager, uint64_t root_page_id){
 
     pager_write_page(pager, root_page_id, buffer);
     pager_sync(pager);
-  }
+    printf("B-TREE: Initialized brand new root storage on Page %lu\n", root_page_id);
+  } else {
+    printf("B-TREE RECOVERY: Storage file detected with %lu pages. Loading root from Page %lu\n", pager->total_pages, root_page_id);
+  } 
   return tree;
 }
 
